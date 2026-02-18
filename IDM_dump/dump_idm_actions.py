@@ -19,7 +19,7 @@ from gr00t.data.embodiment_tags import EmbodimentTag
 
 
 
-def load_dataset_and_config(checkpoint_path, validation_dataset_path, video_indices):
+def load_dataset_and_config(checkpoint_path, validation_dataset_path, video_indices, embodiment=None):
     # Check if checkpoint_path is a HuggingFace model repo
     is_hf_repo = not os.path.exists(checkpoint_path) and '/' in checkpoint_path
     
@@ -46,8 +46,10 @@ def load_dataset_and_config(checkpoint_path, validation_dataset_path, video_indi
     cfg = OmegaConf.create(config)
 
     dataset_name = os.path.basename(validation_dataset_path).split(".")[0]
-    embodiment = dataset_name
+    if embodiment is None:
+        embodiment = dataset_name
     print(f"Dataset name: {dataset_name}")
+    print(f"Using embodiment: {embodiment}")
 
     modality_configs = cfg["modality_configs"][embodiment]
     if video_indices is not None:
@@ -304,6 +306,7 @@ def validate_checkpoint(
     max_episodes=None,
     num_workers=1,
     video_indices=None,
+    embodiment=None,
 ):
     device_count = torch.cuda.device_count()
     print(f"Found {device_count} GPUs available.")
@@ -318,7 +321,12 @@ def validate_checkpoint(
         os.makedirs(output_dir, exist_ok=True)
         print(f"Will save predicted actions to: {output_dir}")
 
-    _, dataset, modality_configs = load_dataset_and_config(checkpoint_path, validation_dataset_path, video_indices)
+    _, dataset, modality_configs = load_dataset_and_config(
+        checkpoint_path,
+        validation_dataset_path,
+        video_indices,
+        embodiment=embodiment,
+    )
 
     dataset.transforms.eval()
 
@@ -460,6 +468,12 @@ if __name__ == "__main__":
         default=None,
         help="Video frame indices to use for inference",
     )
+    parser.add_argument(
+        "--embodiment",
+        type=str,
+        default=None,
+        help="Embodiment config key override (e.g., so100, gr1_unified, franka, robocasa_panda_omron)",
+    )
 
     args = parser.parse_args()
 
@@ -472,4 +486,5 @@ if __name__ == "__main__":
         max_episodes=args.max_episodes,
         num_workers=args.num_workers,
         video_indices=args.video_indices,
+        embodiment=args.embodiment,
     )
