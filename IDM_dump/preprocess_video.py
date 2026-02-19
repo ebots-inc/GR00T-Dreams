@@ -157,6 +157,11 @@ def process_batch_frames(frames, output_videos, src_path, dataset, original_widt
             output_videos['observation.images.left_view'].append_data(image_side_0)
             output_videos['observation.images.right_view'].append_data(image_side_1)
             output_videos['observation.images.wrist_view'].append_data(wrist_image)
+        elif dataset == 'ebots':
+            cam_high, cam_left_wrist, cam_right_wrist = extract_subimages(frame, ratio)
+            output_videos['observation.images.cam_high'].append_data(cam_high)
+            output_videos['observation.images.cam_left_wrist'].append_data(cam_left_wrist)
+            output_videos['observation.images.cam_right_wrist'].append_data(cam_right_wrist)
         elif dataset == 'gr1':
             image = custom_crop_pad_resize_gr1(frame)
             output_videos['observation.images.ego_view'].append_data(image)
@@ -182,6 +187,12 @@ def process_video(args):
             'observation.images.left_view': os.path.join(dst_dir, 'videos', 'observation.images.left_view'),
             'observation.images.right_view': os.path.join(dst_dir, 'videos', 'observation.images.right_view'),
             'observation.images.wrist_view': os.path.join(dst_dir, 'videos', 'observation.images.wrist_view'),
+        }
+    elif dataset == 'ebots':
+        output_dirs = {
+            'observation.images.cam_high': os.path.join(dst_dir, 'videos', 'observation.images.cam_high'),
+            'observation.images.cam_left_wrist': os.path.join(dst_dir, 'videos', 'observation.images.cam_left_wrist'),
+            'observation.images.cam_right_wrist': os.path.join(dst_dir, 'videos', 'observation.images.cam_right_wrist'),
         }
     elif dataset == 'gr1':
         output_dirs = {
@@ -330,7 +341,7 @@ def main():
     parser.add_argument('--max_videos', type=int, default=None,
                         help='Maximum number of videos to process per subdirectory (for debugging)')
     parser.add_argument('--dataset', type=str, default='robocasa',
-                        help='Dataset name', choices=['robocasa', 'gr1', 'franka', 'so100'])
+                        help='Dataset name', choices=['robocasa', 'ebots', 'gr1', 'franka', 'so100'])
     parser.add_argument("--recursive", action="store_true", help="Process subdirectories recursively, maintaining directory structure")
     parser.add_argument("--original_width", type=int, default=1280, help="Original width of the video")
     parser.add_argument("--original_height", type=int, default=800, help="Original height of the video")
