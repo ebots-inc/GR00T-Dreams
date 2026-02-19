@@ -452,6 +452,8 @@ def main():
             args.embodiment = "franka"
         elif 'so100' in args.output_dir:
             args.embodiment = "so100"
+        elif 'ebots' in args.output_dir:
+            args.embodiment = "ebots"
         else:
             raise ValueError(f"Unknown embodiment for {args.output_dir}")\
 
@@ -462,6 +464,8 @@ def main():
     elif args.embodiment == "franka":
         args.annotation_source = "language.language_instruction"
     elif args.embodiment == "so100":
+        args.annotation_source = "human.task_description"
+    elif args.embodiment == "ebots":
         args.annotation_source = "human.task_description"
     
     if args.recursive:
@@ -498,12 +502,19 @@ def main():
         source_dir = "IDM_dump/global_metadata/franka"
     elif args.embodiment == "so100":
         source_dir = "IDM_dump/global_metadata/so100"
+    elif args.embodiment == "ebots":
+        source_dir = "IDM_dump/global_metadata/ebots"
     
     # copy modality.json
     shutil.copy(source_dir + "/modality.json", args.output_dir + "/meta/modality.json")
 
     # copy stats.json
-    shutil.copy(source_dir + "/stats.json", args.output_dir + "/meta/stats.json")
+    stats_src = source_dir + "/stats.json"
+    stats_dst = args.output_dir + "/meta/stats.json"
+    if os.path.exists(stats_src):
+        shutil.copy(stats_src, stats_dst)
+    else:
+        print(f"Warning: stats.json not found, skipping: {stats_src}")
     
 
 if __name__ == "__main__":
