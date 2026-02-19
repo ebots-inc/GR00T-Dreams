@@ -86,7 +86,9 @@ def load_dataset_and_config(checkpoint_path, validation_dataset_path, video_indi
     elif "robocasa" in embodiment:
         embodiment_tag = EmbodimentTag.ROBOCASA
     else:
-        raise ValueError(f"Unknown embodiment: {embodiment}")
+        # Treat any other embodiment (e.g. ebots) as a new embodiment to avoid
+        # hardcoding tags in this script.
+        embodiment_tag = EmbodimentTag.NEW_EMBODIMENT
 
     dataset = LeRobotSingleDataset(
         dataset_path=validation_dataset_path,

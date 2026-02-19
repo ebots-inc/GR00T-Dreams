@@ -1,0 +1,139 @@
+modality_configs:
+  ebots:
+    video:
+      _target_: gr00t.data.dataset.ModalityConfig
+      # Default matches EbotsDataConfig; dump_idm_actions.py can override this via --video_indices.
+      delta_indices: [0, 16]
+      modality_keys:
+        - video.cam_high
+        - video.cam_left_wrist
+        - video.cam_right_wrist
+    state:
+      _target_: gr00t.data.dataset.ModalityConfig
+      delta_indices: [0, 16]
+      modality_keys:
+        - state.arm_l
+        - state.arm_l_finger
+        - state.arm_r
+        - state.arm_r_finger
+        - state.stage
+    action:
+      _target_: gr00t.data.dataset.ModalityConfig
+      delta_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      modality_keys:
+        - action.arm_l
+        - action.arm_l_finger
+        - action.arm_r
+        - action.arm_r_finger
+        - action.stage
+    language:
+      _target_: gr00t.data.dataset.ModalityConfig
+      delta_indices: [0, 16]
+      modality_keys:
+        - annotation.human.task_description
+
+all_transforms:
+  ebots:
+    # Match the HF conf.yaml style (re-exported symbols under gr00t.data.transform).
+    _target_: gr00t.data.transform.ComposedModalityTransform
+    transforms:
+      # Video transforms (keep outputs as numpy for GR00TIDMTransform's PIL conversion).
+      - _target_: gr00t.data.transform.VideoToTensor
+        apply_to:
+          - video.cam_high
+          - video.cam_left_wrist
+          - video.cam_right_wrist
+      - _target_: gr00t.data.transform.VideoCrop
+        apply_to:
+          - video.cam_high
+          - video.cam_left_wrist
+          - video.cam_right_wrist
+        scale: 0.95
+        mode: random
+      - _target_: gr00t.data.transform.VideoResize
+        apply_to:
+          - video.cam_high
+          - video.cam_left_wrist
+          - video.cam_right_wrist
+        height: 224
+        width: 224
+        interpolation: linear
+      # NOTE: omit VideoColorJitter for inference stability (and dump_idm_actions.py's filter target string
+      # currently won't match the correct gr00t.* path anyway).
+      - _target_: gr00t.data.transform.VideoToNumpy
+        apply_to:
+          - video.cam_high
+          - video.cam_left_wrist
+          - video.cam_right_wrist
+
+      # State transforms.
+      - _target_: gr00t.data.transform.StateActionToTensor
+        apply_to:
+          - state.arm_l
+          - state.arm_l_finger
+          - state.arm_r
+          - state.arm_r_finger
+          - state.stage
+      - _target_: gr00t.data.transform.StateActionTransform
+        apply_to:
+          - state.arm_l
+          - state.arm_l_finger
+          - state.arm_r
+          - state.arm_r_finger
+          - state.stage
+        normalization_modes:
+          state.arm_l: min_max
+          state.arm_l_finger: min_max
+          state.arm_r: min_max
+          state.arm_r_finger: min_max
+          state.stage: min_max
+
+      # Action transforms.
+      - _target_: gr00t.data.transform.StateActionToTensor
+        apply_to:
+          - action.arm_l
+          - action.arm_l_finger
+          - action.arm_r
+          - action.arm_r_finger
+          - action.stage
+      - _target_: gr00t.data.transform.StateActionTransform
+        apply_to:
+          - action.arm_l
+          - action.arm_l_finger
+          - action.arm_r
+          - action.arm_r_finger
+          - action.stage
+        normalization_modes:
+          action.arm_l: min_max
+          action.arm_l_finger: min_max
+          action.arm_r: min_max
+          action.arm_r_finger: min_max
+          action.stage: min_max
+
+      # Concat into {video,state,action} and then build IDM-specific inputs.
+      - _target_: gr00t.data.transform.ConcatTransform
+        video_concat_order:
+          - video.cam_high
+          - video.cam_left_wrist
+          - video.cam_right_wrist
+        state_concat_order:
+          - state.arm_l
+          - state.arm_l_finger
+          - state.arm_r
+          - state.arm_r_finger
+          - state.stage
+        action_concat_order:
+          - action.arm_l
+          - action.arm_l_finger
+          - action.arm_r
+          - action.arm_r_finger
+          - action.stage
+      - _target_: gr00t.model.transforms_idm.GR00TIDMTransform
+        action_horizon: 16
+        max_action_dim: 32
+        max_sequence_length: 112
+
+# dump_idm_actions.py expects this mapping to exist (even if it doesn't pass it through).
+metadata_versions:
+  ebots: 1
+
