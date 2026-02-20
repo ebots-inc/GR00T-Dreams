@@ -1,0 +1,73 @@
+{
+    "state": {
+        "arm_l": {
+            "start": 0,
+            "end": 6,
+            "original_key": "observation.cart_state"
+        },
+        "arm_l_finger": {
+            "start": 6,
+            "end": 7,
+            "original_key": "observation.cart_state"
+        },
+        "arm_r": {
+            "start": 7,
+            "end": 13,
+            "original_key": "observation.cart_state"
+        },
+        "arm_r_finger": {
+            "start": 13,
+            "end": 14,
+            "original_key": "observation.cart_state"
+        },
+        "stage": {
+            "start": 14,
+            "end": 17,
+            "original_key": "observation.cart_state"
+        }
+    },
+    "action": {
+        "arm_l": {
+            "start": 0,
+            "end": 6,
+            "original_key": "cart_action"
+        },
+        "arm_l_finger": {
+            "start": 6,
+            "end": 7,
+            "original_key": "cart_action"
+        },
+        "arm_r": {
+            "start": 7,
+            "end": 13,
+            "original_key": "cart_action"
+        },
+        "arm_r_finger": {
+            "start": 13,
+            "end": 14,
+            "original_key": "cart_action"
+        },
+        "stage": {
+            "start": 14,
+            "end": 17,
+            "original_key": "cart_action"
+        }
+    },
+    "video": {
+        "cam_high": {
+            "original_key": "observation.images.cam_high"
+        },
+        "cam_left_wrist": {
+            "original_key": "observation.images.cam_left_wrist"
+        },
+        "cam_right_wrist": {
+            "original_key": "observation.images.cam_right_wrist"
+        }
+    },
+    "annotation": {
+        "human.task_description": {
+            "original_key": "task_index"
+        }
+    }
+}
+
