@@ -343,7 +343,9 @@ def convert_raw_to_lerobot(
         "total_videos": len(video_subfolders),
         "chunks_size": CHUNKS_SIZE,
         "total_chunks": (len(video_files) + CHUNKS_SIZE - 1) // CHUNKS_SIZE,
-        "fps": 8 if cosmos_predict2 else fps,
+        # NOTE: cosmos_predict2 mode uses fixed 93-frame episodes at 16 FPS (see `actual_fps` above)
+        # and the copied MP4s are 16 FPS. This was previously hardcoded to 8.
+        "fps": 16 if cosmos_predict2 else fps,
         "data_path": DATA_PATH,
         "video_path": VIDEO_PATH,
         "features": {
