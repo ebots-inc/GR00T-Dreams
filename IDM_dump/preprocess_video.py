@@ -128,8 +128,8 @@ def extract_subimages_franka(frame, original_width, original_height):
     return image_side_0, image_side_1, wrist_image
 
 
-def extract_subimages(frame, ratio):
-    """Extract subimages from a frame and resize to 256x256 while preserving aspect ratio with padding."""
+def extract_subimages(frame, ratio, target_size=(256, 256)):
+    """Extract subimages from a frame and resize while preserving aspect ratio with padding."""
     h, w = frame.shape[:2]  # h=480, w=832
     
     # Calculate dimensions for even division
@@ -141,9 +141,9 @@ def extract_subimages(frame, ratio):
     image_side_1 = frame[:half_height, half_width:]     # Top-right (240x416)
     wrist_image = frame[half_height:, :half_width]      # Bottom-left (240x416)
 
-    image_side_0 = resize_with_padding(image_side_0, ratio)
-    image_side_1 = resize_with_padding(image_side_1, ratio)
-    wrist_image = resize_with_padding(wrist_image, ratio)
+    image_side_0 = resize_with_padding(image_side_0, ratio, target_size=target_size)
+    image_side_1 = resize_with_padding(image_side_1, ratio, target_size=target_size)
+    wrist_image = resize_with_padding(wrist_image, ratio, target_size=target_size)
     
     return image_side_0, image_side_1, wrist_image
 
@@ -158,7 +158,7 @@ def process_batch_frames(frames, output_videos, src_path, dataset, original_widt
             output_videos['observation.images.right_view'].append_data(image_side_1)
             output_videos['observation.images.wrist_view'].append_data(wrist_image)
         elif dataset == 'ebots':
-            cam_high, cam_left_wrist, cam_right_wrist = extract_subimages(frame, ratio)
+            cam_high, cam_left_wrist, cam_right_wrist = extract_subimages(frame, ratio, target_size=(224, 224))
             output_videos['observation.images.cam_high'].append_data(cam_high)
             output_videos['observation.images.cam_left_wrist'].append_data(cam_left_wrist)
             output_videos['observation.images.cam_right_wrist'].append_data(cam_right_wrist)
