@@ -188,7 +188,9 @@ def worker_func(
                 step_indices = dataset.delta_indices[key] + step_idx
                 step_indices = np.maximum(step_indices, 0)
                 step_indices = np.minimum(step_indices, dataset.trajectory_lengths[tid] - 1)
-                indices = np.array([np.where(np.isclose(whole_indices, val))[0][0] for val in timestamp[step_indices]])
+                # Match trajectory timestamps to video frame indices (handle small mismatches via nearest index)
+                target_ts = timestamp[step_indices]
+                indices = np.array([np.argmin(np.abs(whole_indices - val)) for val in target_ts])
                 step_data[key] = frames[indices]
 
             output = dataset.transforms(step_data)
@@ -309,6 +311,7 @@ def validate_checkpoint(
     num_workers=1,
     video_indices=None,
     embodiment=None,
+    stats_path=None,
 ):
     device_count = torch.cuda.device_count()
     print(f"Found {device_count} GPUs available.")
@@ -322,6 +325,17 @@ def validate_checkpoint(
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
         print(f"Will save predicted actions to: {output_dir}")
+
+    # If stats_path is provided, copy it to the validation dataset meta before loading.
+    # Otherwise LeRobotSingleDataset will compute stats from parquet (which are placeholder
+    # zeros in the Cosmos pipeline) and write zeros, which then get copied to output.
+    if stats_path and os.path.isfile(stats_path):
+        meta_dir = os.path.join(validation_dataset_path, "meta")
+        os.makedirs(meta_dir, exist_ok=True)
+        dst = os.path.join(meta_dir, "stats.json")
+        import shutil
+        shutil.copy2(stats_path, dst)
+        print(f"Using stats from training dataset: {stats_path} -> {dst}")
 
     _, dataset, modality_configs = load_dataset_and_config(
         checkpoint_path,
@@ -476,6 +490,14 @@ if __name__ == "__main__":
         default=None,
         help="Embodiment config key override (e.g., so100, gr1_unified, franka, robocasa_panda_omron)",
     )
+    parser.add_argument(
+        "--stats_path",
+        type=str,
+        default=None,
+        help="Path to stats.json from the dataset you trained the IDM on (e.g. datasets/set_1/meta/stats.json). "
+        "Copied into the validation dataset before loading so the loader does not overwrite with zeros. "
+        "Schema (keys and dimensions) must match the validation dataset.",
+    )
 
     args = parser.parse_args()
 
@@ -489,4 +511,5 @@ if __name__ == "__main__":
         num_workers=args.num_workers,
         video_indices=args.video_indices,
         embodiment=args.embodiment,
+        stats_path=args.stats_path,
     )
