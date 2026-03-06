@@ -2,6 +2,7 @@
 
 import argparse
 import glob
+import json
 import os
 import tempfile
 
@@ -74,10 +75,53 @@ def fill_episode_states_inplace(parquet_path: str, dryrun: bool) -> tuple[int, i
     return len(df), k
 
 
+def recompute_stats_json(dataset: str, parquet_paths: list[str]) -> None:
+    """
+    Recompute meta/stats.json from parquet files (observation.state and action only).
+    Writes to dataset/meta/stats.json so state stats reflect filled state values.
+    """
+    stat_keys = ["observation.state", "action"]
+    all_data: dict[str, list] = {k: [] for k in stat_keys}
+
+    for path in sorted(parquet_paths):
+        df = pd.read_parquet(path)
+        for k in stat_keys:
+            if k in df.columns:
+                for row in df[k]:
+                    arr = np.asarray(row, dtype=np.float32).ravel()
+                    all_data[k].append(arr)
+
+    le_statistics: dict = {}
+    for k in stat_keys:
+        if not all_data[k]:
+            continue
+        np_data = np.vstack(all_data[k])
+        le_statistics[k] = {
+            "mean": np.mean(np_data, axis=0).tolist(),
+            "std": np.std(np_data, axis=0).tolist(),
+            "min": np.min(np_data, axis=0).tolist(),
+            "max": np.max(np_data, axis=0).tolist(),
+            "q01": np.quantile(np_data, 0.01, axis=0).tolist(),
+            "q99": np.quantile(np_data, 0.99, axis=0).tolist(),
+        }
+
+    meta_dir = os.path.join(dataset, "meta")
+    os.makedirs(meta_dir, exist_ok=True)
+    stats_path = os.path.join(meta_dir, "stats.json")
+    with open(stats_path, "w") as f:
+        json.dump(le_statistics, f, indent=4)
+    print(f"Recomputed stats from {len(parquet_paths)} parquet files -> {stats_path}")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Fill observation.state from action with a 1-step lag (in-place).")
     p.add_argument("--dataset", type=str, required=True, help="LeRobot dataset directory (contains data/chunk-*/).")
     p.add_argument("--dryrun", action="store_true", help="Only report; do not modify files.")
+    p.add_argument(
+        "--recompute_stats",
+        action="store_true",
+        help="After filling states, recompute meta/stats.json from parquet so observation.state stats are non-zero.",
+    )
     args = p.parse_args()
 
     dataset = os.path.expanduser(args.dataset)
@@ -97,6 +141,10 @@ def main() -> int:
 
     mode = "dryrun" if args.dryrun else "inplace"
     print(f"mode={mode} files={files} total_rows={total_rows} overwritten_dims={last_k}")
+
+    if args.recompute_stats and not args.dryrun and parquet_paths:
+        recompute_stats_json(dataset, parquet_paths)
+
     return 0
 
 
