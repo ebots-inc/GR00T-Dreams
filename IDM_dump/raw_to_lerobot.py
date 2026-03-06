@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Dict, List, Any, Tuple
@@ -20,6 +21,19 @@ import math
 CHUNKS_SIZE = 1000
 DATA_PATH = "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"
 VIDEO_PATH = "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4"
+
+
+def _video_id_sort_key(video_id: str):
+    """Sort video IDs numerically so '2' < '10'. String sort would give 1, 10, 2, 3, ..."""
+    try:
+        return (0, int(video_id))
+    except ValueError:
+        pass
+    # Zero-padded names like episode_000001: extract trailing number
+    m = re.search(r"(\d+)$", video_id)
+    if m:
+        return (1, int(m.group(1)))
+    return (2, video_id)
 
 
 def get_video_metadata(video_path):
@@ -204,8 +218,8 @@ def convert_raw_to_lerobot(
             video_files = folder.glob("*.mp4")
             all_video_ids.update(video_file.stem for video_file in video_files)
         
-        # Convert to sorted list
-        video_ids = sorted(list(all_video_ids))
+        # Convert to sorted list (numeric sort so episode 2 < 10; string sort would give 1,10,2,...)
+        video_ids = sorted(list(all_video_ids), key=_video_id_sort_key)
         
         # Create dummy video_files list with just the IDs
         video_files = [Path(video_id) for video_id in video_ids]
@@ -268,7 +282,7 @@ def convert_raw_to_lerobot(
             actual_frame_count = 93 if cosmos_predict2 else frame_count
             actual_fps = 16 if cosmos_predict2 else fps
             
-            # Create episode data
+            # Create episode data (placeholder zeros; state/action are filled later by dump_idm_actions or fill_states_from_actions)
             episode_data = {
                 "observation.state": [np.zeros(44, dtype=np.float32)] * actual_frame_count,
                 "action": [np.zeros(44, dtype=np.float32)] * actual_frame_count,
@@ -393,7 +407,8 @@ def process_multiple_folders(
     num_workers: int = None,
     cosmos_predict2: bool = False,
     data_type: str = "lapa",
-    embodiment: str = None
+    embodiment: str = None,
+    video_key: str = None,
 ):
     """Process multiple input folders in parallel."""
     # Get all subdirectories that contain videos/ and labels/ folders
@@ -410,7 +425,7 @@ def process_multiple_folders(
     
     # Prepare arguments for parallel folder processing
     args_list = [
-        (folder, output_base_dir, annotation_source, fps, max_videos, workers_per_folder, cosmos_predict2, data_type, embodiment)
+        (folder, output_base_dir, annotation_source, fps, max_videos, workers_per_folder, cosmos_predict2, data_type, embodiment, video_key)
         for folder in input_folders
     ]
     
@@ -432,13 +447,13 @@ def process_multiple_folders(
 
 def main():
     parser = argparse.ArgumentParser(description="Convert raw dataset to LeRobot format")
-    parser.add_argument("--input_dir", type=str, required=True, help="Input directory containing multiple folders with videos/ and labels/")
-    parser.add_argument("--output_dir", type=str, required=True, help="Output directory for LeRobot dataset")
+    parser.add_argument("--input_dir", type=str, required=True, help="Input directory: either a single folder with videos/ and labels/ (use without --recursive), or a parent dir of multiple such folders (use with --recursive).")
+    parser.add_argument("--output_dir", type=str, required=True, help="Output directory for LeRobot dataset. Without --recursive, meta/info.json and data are written here directly (recommended for Cosmos Predict2.5 flow).")
     parser.add_argument("--fps", type=int, default=16, help="Video FPS")
     parser.add_argument("--max_videos", type=int, default=None, help="Maximum number of videos to process per folder (for debugging)")
     parser.add_argument("--num_workers", type=int, default=16, help="Total number of worker processes")
     parser.add_argument("--cosmos_predict2", action="store_true", help="Process videos for cosmos_predict2 video models (fixed FPS=8, frames=81)")
-    parser.add_argument("--recursive", action="store_true", help="Process a single folder instead of multiple folders")
+    parser.add_argument("--recursive", action="store_true", help="Process multiple subfolders under input_dir; each becomes output_dir/embodiment.<subfolder_name>. Omit for single-folder input so output is written directly to output_dir (no embodiment.* subdir).")
     parser.add_argument("--data_type", type=str, default="dream", choices=["lapa", "dream"])
     parser.add_argument("--embodiment", type=str, default=None, help="Embodiment")
     parser.add_argument("--video_key", type=str, default=None, help="Video key if cosmos_predict2 is false")
@@ -471,7 +486,7 @@ def main():
         args.annotation_source = "human.task_description"
     
     if args.recursive:
-        # Process a single folder (original behavior)
+        # Process multiple subfolders under input_dir
         process_multiple_folders(
             input_base_dir=Path(args.input_dir),
             output_base_dir=Path(args.output_dir),
@@ -481,7 +496,8 @@ def main():
             num_workers=args.num_workers,
             cosmos_predict2=args.cosmos_predict2,
             data_type=args.data_type,
-            embodiment=args.embodiment
+            embodiment=args.embodiment,
+            video_key=args.video_key,
         )
     else:
         convert_raw_to_lerobot(
@@ -507,12 +523,14 @@ def main():
     elif args.embodiment == "ebots":
         source_dir = "IDM_dump/global_metadata/ebots"
     
-    # copy modality.json
-    shutil.copy(source_dir + "/modality.json", args.output_dir + "/meta/modality.json")
+    # copy modality.json (ensure meta dir exists when using --recursive)
+    meta_dir = os.path.join(args.output_dir, "meta")
+    os.makedirs(meta_dir, exist_ok=True)
+    shutil.copy(source_dir + "/modality.json", os.path.join(meta_dir, "modality.json"))
 
     # copy stats.json
     stats_src = source_dir + "/stats.json"
-    stats_dst = args.output_dir + "/meta/stats.json"
+    stats_dst = os.path.join(meta_dir, "stats.json")
     if os.path.exists(stats_src):
         shutil.copy(stats_src, stats_dst)
     else:
