@@ -22,6 +22,16 @@ from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 import torch
+
+# PyTorch 2.6+ defaults torch.load(weights_only=True). HF Trainer resume loads RNG state
+# (contains numpy), which fails. Ensure weights_only=False when not specified.
+_torch_load_orig = torch.load
+def _torch_load_patched(*args, **kwargs):
+    if "weights_only" not in kwargs:
+        kwargs["weights_only"] = False
+    return _torch_load_orig(*args, **kwargs)
+torch.load = _torch_load_patched
+
 import tyro
 from transformers import TrainingArguments
 
@@ -56,7 +66,10 @@ class Config:
     """Number of GPUs to use for training."""
 
     save_steps: int = 500
-    """Number of steps between saving checkpoints."""\
+    """Number of steps between saving checkpoints."""
+
+    save_total_limit: int = 8
+    """Max number of checkpoints to keep; older ones are deleted. Set to 0 or None to keep all (can use a lot of disk)."""
 
     tune_action_head: bool = True
     """Whether to fine-tune the action head."""
@@ -164,7 +177,7 @@ def main(config: Config):
         max_steps=config.max_steps,
         save_strategy="steps",
         save_steps=config.save_steps,
-        save_total_limit=8,
+        save_total_limit=config.save_total_limit or None,  # None = keep all checkpoints
         report_to=config.report_to,
         seed=42,
         do_eval=False,
