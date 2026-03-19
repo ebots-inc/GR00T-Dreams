@@ -136,8 +136,10 @@ class VideoTransform(ModalityTransform):
                     sub_key
                 ].resolution
             else:
+                available = list(dataset_metadata.modalities.video.keys())
                 raise ValueError(
-                    f"Video key {sub_key} not found in dataset metadata. Available keys: {dataset_metadata.modalities.video.keys()}"
+                    f"Video key {sub_key} not found in dataset metadata. Available keys: {available}. "
+                    f"If this is a 2-camera ebots dataset (e.g. no right wrist cam), use --data-config ebots_no_right_cam."
                 )
         train_transform = self.get_transform(mode="train")
         eval_transform = self.get_transform(mode="eval")

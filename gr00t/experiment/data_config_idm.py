@@ -296,6 +296,12 @@ class EbotsDataConfig(BaseDataConfig):
         return ComposedModalityTransform(transforms=transforms)
 
 
+class EbotsNoRightCamDataConfig(EbotsDataConfig):
+    """Ebots data config for datasets without the right wrist camera (e.g. cableHarness_noRightCam)."""
+
+    video_keys = ["video.cam_high", "video.cam_left_wrist"]
+
+
 ###########################################################################################
 
 
@@ -864,4 +870,5 @@ DATA_CONFIG_MAP = {
     "so100": So100DataConfig(),
     "franka": FrankaDataConfig(),
     "ebots": EbotsDataConfig(),
+    "ebots_no_right_cam": EbotsNoRightCamDataConfig(),
 }

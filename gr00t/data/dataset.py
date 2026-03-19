@@ -286,11 +286,14 @@ class LeRobotSingleDataset(Dataset):
         with open(le_info_path, "r") as f:
             le_info = json.load(f)
         simplified_modality_meta["video"] = {}
+        le_features = le_info.get("features", {})
         for new_key in le_modality_meta.video:
             original_key = le_modality_meta.video[new_key].original_key
             if original_key is None:
                 original_key = new_key
-            le_video_meta = le_info["features"][original_key]
+            if original_key not in le_features:
+                continue  # skip video keys not present in this dataset (e.g. noRightCam)
+            le_video_meta = le_features[original_key]
             height = le_video_meta["shape"][le_video_meta["names"].index("height")]
             width = le_video_meta["shape"][le_video_meta["names"].index("width")]
             # NOTE(FH): different lerobot dataset versions have different keys for the number of channels and fps
