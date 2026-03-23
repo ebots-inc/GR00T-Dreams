@@ -17,6 +17,14 @@ from gr00t.model.idm import IDM
 from gr00t.utils.video import get_all_frames_and_timestamps
 from gr00t.data.embodiment_tags import EmbodimentTag
 
+import sys
+from pathlib import Path as _Path
+
+_IDM_DUMP_DIR = str(_Path(__file__).resolve().parent)
+if _IDM_DUMP_DIR not in sys.path:
+    sys.path.insert(0, _IDM_DUMP_DIR)
+from modality_keys import state_action_keys_from_modality
+
 
 
 def load_dataset_and_config(checkpoint_path, validation_dataset_path, video_indices, embodiment=None):
@@ -164,7 +172,11 @@ def worker_func(
     model.eval()
     device = torch.device(f"cuda:{gpu_id}")
     model.to(device)
-    
+
+    modality_json_path = os.path.join(validation_dataset_path, "meta", "modality.json")
+    with open(modality_json_path, "r") as f:
+        modality_config = json.load(f)
+    _, lerobot_action_column = state_action_keys_from_modality(modality_config)
 
     for tid in tqdm(traj_id_list, desc=f"GPU {gpu_id}", position=gpu_id):
         action_dict = {}
@@ -230,14 +242,8 @@ def worker_func(
             pred_actions = out["action_pred"].cpu()
             pred_actions = dataset.transforms.unapply(Batch(action=pred_actions))
 
-            # Load modality.json to get the proper structure
-            modality_json_path = os.path.join(validation_dataset_path, 'meta', 'modality.json')
-
-            with open(modality_json_path, 'r') as f:
-                modality_config = json.load(f)
-            
-            # Get action part configurations
-            action_parts = modality_config.get('action', {})
+            # Get action part configurations (modality.json loaded once per worker)
+            action_parts = modality_config.get("action", {})
             
             # Calculate total action dimension
             total_dim = 0
@@ -293,7 +299,7 @@ def worker_func(
         
         for s in action_dict:
             mean_action = np.mean(action_dict[s], axis=0)
-            traj_data.at[s, "action"] = mean_action
+            traj_data.at[s, lerobot_action_column] = mean_action
 
         save_trajectory_data(traj_data, dataset, tid, output_dir)
     

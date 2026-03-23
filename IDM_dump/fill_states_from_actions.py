@@ -4,10 +4,17 @@ import argparse
 import glob
 import json
 import os
+import sys
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+_IDM_DUMP_DIR = str(Path(__file__).resolve().parent)
+if _IDM_DUMP_DIR not in sys.path:
+    sys.path.insert(0, _IDM_DUMP_DIR)
+from modality_keys import state_action_keys_from_modality
 
 
 def _as_1d_float_array(x) -> np.ndarray:
@@ -32,28 +39,35 @@ def _atomic_write_parquet(df: pd.DataFrame, dst_path: str) -> None:
                 pass
 
 
-def fill_episode_states_inplace(parquet_path: str, dryrun: bool) -> tuple[int, int]:
+def fill_episode_states_inplace(
+    parquet_path: str,
+    dryrun: bool,
+    state_col: str,
+    action_col: str,
+) -> tuple[int, int]:
     """
-    Fill `observation.state` from `action` with a 1-step lag:
+    Fill state column from action column with a 1-step lag (LeRobot column names from modality.json):
       - state[0] = action[0]
       - state[t] = action[t-1] for t>=1
+
+    Joint space: observation.state / action. Cartesian: observation.cart_state / cart_action.
 
     If the state vector is longer than the action vector, only the first A dims are overwritten.
     Returns: (n_rows, n_dims_overwritten)
     """
     df = pd.read_parquet(parquet_path)
-    if "action" not in df.columns:
-        raise ValueError(f"Missing 'action' column: {parquet_path}")
+    if action_col not in df.columns:
+        raise ValueError(f"Missing action column {action_col!r}: {parquet_path}")
 
     if len(df) == 0:
         return 0, 0
 
-    actions = [_as_1d_float_array(x) for x in df["action"].to_numpy()]
+    actions = [_as_1d_float_array(x) for x in df[action_col].to_numpy()]
     a0 = actions[0]
     a_dim = int(a0.shape[0])
 
-    if "observation.state" in df.columns:
-        states = [_as_1d_float_array(x) for x in df["observation.state"].to_numpy()]
+    if state_col in df.columns:
+        states = [_as_1d_float_array(x) for x in df[state_col].to_numpy()]
         s_dim = int(states[0].shape[0])
     else:
         s_dim = a_dim
@@ -69,7 +83,7 @@ def fill_episode_states_inplace(parquet_path: str, dryrun: bool) -> tuple[int, i
         out_states.append(base.tolist())
 
     if not dryrun:
-        df["observation.state"] = out_states
+        df[state_col] = out_states
         _atomic_write_parquet(df, parquet_path)
 
     return len(df), k
@@ -77,10 +91,12 @@ def fill_episode_states_inplace(parquet_path: str, dryrun: bool) -> tuple[int, i
 
 def recompute_stats_json(dataset: str, parquet_paths: list[str]) -> None:
     """
-    Recompute meta/stats.json from parquet files (observation.state and action only).
+    Recompute meta/stats.json from parquet files for the state/action columns in meta/modality.json.
     Writes to dataset/meta/stats.json so state stats reflect filled state values.
     """
-    stat_keys = ["observation.state", "action"]
+    modality_path = os.path.join(dataset, "meta", "modality.json")
+    with open(modality_path, encoding="utf-8") as f:
+        stat_keys = list(state_action_keys_from_modality(json.load(f)))
     all_data: dict[str, list] = {k: [] for k in stat_keys}
 
     for path in sorted(parquet_paths):
@@ -114,7 +130,10 @@ def recompute_stats_json(dataset: str, parquet_paths: list[str]) -> None:
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Fill observation.state from action with a 1-step lag (in-place).")
+    p = argparse.ArgumentParser(
+        description="Fill state from action with a 1-step lag (in-place). "
+        "Column names follow meta/modality.json (joint vs cartesian)."
+    )
     p.add_argument("--dataset", type=str, required=True, help="LeRobot dataset directory (contains data/chunk-*/).")
     p.add_argument("--dryrun", action="store_true", help="Only report; do not modify files.")
     p.add_argument(
@@ -130,11 +149,17 @@ def main() -> int:
     if not parquet_paths:
         raise SystemExit(f"No episode parquets found under: {pattern}")
 
+    modality_path = os.path.join(dataset, "meta", "modality.json")
+    with open(modality_path, encoding="utf-8") as f:
+        state_col, action_col = state_action_keys_from_modality(json.load(f))
+
     files = 0
     total_rows = 0
     last_k = None
     for path in parquet_paths:
-        n_rows, k = fill_episode_states_inplace(path, dryrun=args.dryrun)
+        n_rows, k = fill_episode_states_inplace(
+            path, dryrun=args.dryrun, state_col=state_col, action_col=action_col
+        )
         files += 1
         total_rows += n_rows
         last_k = k

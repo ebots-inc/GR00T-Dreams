@@ -22,6 +22,11 @@ CHUNKS_SIZE = 1000
 DATA_PATH = "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"
 VIDEO_PATH = "videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4"
 
+# Ebots IDM / LeRobot modality uses 17-D state+action (see IDM_dump/global_metadata/ebots/modality*.json).
+EBOTS_STATE_ACTION_DIM = 17
+# Legacy placeholder width for non-ebots Cosmos-style dumps.
+DEFAULT_STATE_ACTION_DIM = 44
+
 
 def _video_id_sort_key(video_id: str):
     """Sort video IDs numerically so '2' < '10'. String sort would give 1, 10, 2, 3, ..."""
@@ -82,6 +87,43 @@ def json_dump(data: Dict[str, Any], path: Path, indent: int = 4) -> None:
         json.dump(data, f, indent=indent)
 
 
+def _copy_global_modality_and_stats(meta_dir: Path, embodiment: str | None, action_space: str) -> None:
+    """Copy modality.json (and stats.json if present) from IDM_dump/global_metadata."""
+    if embodiment is None:
+        return
+    repo_root = Path(__file__).resolve().parent.parent
+    gm = repo_root / "IDM_dump" / "global_metadata"
+    if embodiment == "gr1_unified":
+        template_dir = gm / "gr1"
+    elif embodiment == "robocasa_panda_omron":
+        template_dir = gm / "robocasa"
+    elif embodiment == "franka":
+        template_dir = gm / "franka"
+    elif embodiment == "so100":
+        template_dir = gm / "so100"
+    elif embodiment == "ebots":
+        template_dir = gm / "ebots"
+    else:
+        return
+    if action_space == "cartesian":
+        if embodiment != "ebots":
+            raise ValueError("action_space='cartesian' is only valid for embodiment='ebots'")
+        modal_src = template_dir / "modality_cart.json"
+    else:
+        modal_src = template_dir / "modality.json"
+    if not modal_src.is_file():
+        print(f"Warning: modality template not found, skipping: {modal_src}")
+        return
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(modal_src, meta_dir / "modality.json")
+    stats_src = template_dir / "stats.json"
+    stats_dst = meta_dir / "stats.json"
+    if stats_src.is_file():
+        shutil.copy(stats_src, stats_dst)
+    else:
+        print(f"Warning: stats.json not found, skipping: {stats_src}")
+
+
 def process_video_chunk(args):
     """Process a chunk of videos in parallel."""
     video_files, labels_dir, output_dir, cosmos_predict2, data_type, videos_dir, video_key = args
@@ -97,7 +139,7 @@ def process_video_chunk(args):
         
         # Get video frame count (if not in cosmos_predict2 mode)
         if cosmos_predict2:
-            frame_count = 93  # Fixed frame count for cosmos_predict2
+            frame_count = 93  # Fixed frame count for Cosmos-Predict2/2.5
         else:
             try:
                 cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", 
@@ -157,7 +199,19 @@ def copy_videos_parallel(video_copy_tasks, max_workers=16):
 
 def process_folder(args):
     """Process a single input folder."""
-    folder_path, output_base_dir, annotation_source, fps, max_videos, num_workers_per_folder, cosmos_predict2, data_type, embodiment, video_key = args
+    (
+        folder_path,
+        output_base_dir,
+        annotation_source,
+        fps,
+        max_videos,
+        num_workers_per_folder,
+        cosmos_predict2,
+        data_type,
+        embodiment,
+        video_key,
+        action_space,
+    ) = args
 
     
     
@@ -177,6 +231,8 @@ def process_folder(args):
         cosmos_predict2=cosmos_predict2,
         data_type=data_type,
         video_key=video_key,
+        embodiment=embodiment,
+        action_space=action_space,
     )
     
     return folder_name, result
@@ -191,8 +247,17 @@ def convert_raw_to_lerobot(
     cosmos_predict2: bool = False,
     data_type: str = "lapa",
     video_key: str = None,
+    embodiment: str | None = None,
+    action_space: str = "joint",
 ):
-    """Convert raw dataset to LeRobot format."""
+    """Convert raw dataset to LeRobot format.
+
+    For embodiment ``ebots``:
+      - ``action_space=joint`` (default): columns ``observation.state`` and ``action``, dim 17.
+      - ``action_space=cartesian``: columns ``observation.cart_state`` and ``cart_action``, dim 17.
+
+    Other embodiments keep the legacy 44-D ``observation.state`` / ``action`` placeholders.
+    """
 
     
     
@@ -281,11 +346,25 @@ def convert_raw_to_lerobot(
             # If cosmos_predict2 mode is enabled, use fixed frame count
             actual_frame_count = 93 if cosmos_predict2 else frame_count
             actual_fps = 16 if cosmos_predict2 else fps
+
+            if embodiment == "ebots":
+                if action_space == "cartesian":
+                    state_col, action_col = "observation.cart_state", "cart_action"
+                elif action_space == "joint":
+                    state_col, action_col = "observation.state", "action"
+                else:
+                    raise ValueError(
+                        f"ebots action_space must be 'joint' or 'cartesian', got {action_space!r}"
+                    )
+                sa_dim = EBOTS_STATE_ACTION_DIM
+            else:
+                state_col, action_col = "observation.state", "action"
+                sa_dim = DEFAULT_STATE_ACTION_DIM
             
             # Create episode data (placeholder zeros; state/action are filled later by dump_idm_actions or fill_states_from_actions)
             episode_data = {
-                "observation.state": [np.zeros(44, dtype=np.float32)] * actual_frame_count,
-                "action": [np.zeros(44, dtype=np.float32)] * actual_frame_count,
+                state_col: [np.zeros(sa_dim, dtype=np.float32)] * actual_frame_count,
+                action_col: [np.zeros(sa_dim, dtype=np.float32)] * actual_frame_count,
                 "timestamp": [i/actual_fps for i in range(actual_frame_count)],
                 "episode_index": [episode_index] * actual_frame_count,
                 "index": np.arange(total_frames, total_frames + actual_frame_count),
@@ -362,22 +441,41 @@ def convert_raw_to_lerobot(
         "fps": 16 if cosmos_predict2 else fps,
         "data_path": DATA_PATH,
         "video_path": VIDEO_PATH,
-        "features": {
-            "observation.state": {
-                "dtype": "float32",
-                "shape": (44,),
-                "names": [f"motor_{i}" for i in range(44)]
-            },
-            "action": {
-                "dtype": "float32",
-                "shape": (44,),
-                "names": [f"motor_{i}" for i in range(44)]
-            },
-            f"annotation.{annotation_source}": {
-                "dtype": "int64",
-                "shape": (1,)
-            }
+        "features": {}
+    }
+
+    if embodiment == "ebots":
+        if action_space == "cartesian":
+            st_col, ac_col = "observation.cart_state", "cart_action"
+        else:
+            st_col, ac_col = "observation.state", "action"
+        motor_names = [f"motor_{i}" for i in range(EBOTS_STATE_ACTION_DIM)]
+        info["features"][st_col] = {
+            "dtype": "float32",
+            "shape": (EBOTS_STATE_ACTION_DIM,),
+            "names": motor_names,
         }
+        info["features"][ac_col] = {
+            "dtype": "float32",
+            "shape": (EBOTS_STATE_ACTION_DIM,),
+            "names": motor_names,
+        }
+    else:
+        motor_names = [f"motor_{i}" for i in range(DEFAULT_STATE_ACTION_DIM)]
+        info["features"]["observation.state"] = {
+            "dtype": "float32",
+            "shape": (DEFAULT_STATE_ACTION_DIM,),
+            "names": motor_names,
+        }
+        info["features"]["action"] = {
+            "dtype": "float32",
+            "shape": (DEFAULT_STATE_ACTION_DIM,),
+            "names": motor_names,
+        }
+
+    info["features"][f"annotation.{annotation_source}"] = {
+        "dtype": "int64",
+        "shape": (1,),
     }
     
 
@@ -396,6 +494,8 @@ def convert_raw_to_lerobot(
     info_path = meta_dir / "info.json"
     json_dump(info, info_path, indent=4)
 
+    _copy_global_modality_and_stats(meta_dir, embodiment, action_space)
+
     return output_dir
 
 def process_multiple_folders(
@@ -409,6 +509,7 @@ def process_multiple_folders(
     data_type: str = "lapa",
     embodiment: str = None,
     video_key: str = None,
+    action_space: str = "joint",
 ):
     """Process multiple input folders in parallel."""
     # Get all subdirectories that contain videos/ and labels/ folders
@@ -425,7 +526,19 @@ def process_multiple_folders(
     
     # Prepare arguments for parallel folder processing
     args_list = [
-        (folder, output_base_dir, annotation_source, fps, max_videos, workers_per_folder, cosmos_predict2, data_type, embodiment, video_key)
+        (
+            folder,
+            output_base_dir,
+            annotation_source,
+            fps,
+            max_videos,
+            workers_per_folder,
+            cosmos_predict2,
+            data_type,
+            embodiment,
+            video_key,
+            action_space,
+        )
         for folder in input_folders
     ]
     
@@ -452,11 +565,19 @@ def main():
     parser.add_argument("--fps", type=int, default=16, help="Video FPS")
     parser.add_argument("--max_videos", type=int, default=None, help="Maximum number of videos to process per folder (for debugging)")
     parser.add_argument("--num_workers", type=int, default=16, help="Total number of worker processes")
-    parser.add_argument("--cosmos_predict2", action="store_true", help="Process videos for cosmos_predict2 video models (fixed FPS=8, frames=81)")
+    parser.add_argument("--cosmos_predict2", action="store_true", help="Use fixed FPS=16 and 93 frames per episode (Cosmos-Predict2/2.5). Omit for variable-length videos (frame count from ffprobe per video).")
     parser.add_argument("--recursive", action="store_true", help="Process multiple subfolders under input_dir; each becomes output_dir/embodiment.<subfolder_name>. Omit for single-folder input so output is written directly to output_dir (no embodiment.* subdir).")
     parser.add_argument("--data_type", type=str, default="dream", choices=["lapa", "dream"])
     parser.add_argument("--embodiment", type=str, default=None, help="Embodiment")
     parser.add_argument("--video_key", type=str, default=None, help="Video key if cosmos_predict2 is false")
+    parser.add_argument(
+        "--action-space",
+        type=str,
+        default="joint",
+        choices=["joint", "cartesian"],
+        help="For embodiment ebots: joint uses observation.state/action (17-D); "
+        "cartesian uses observation.cart_state/cart_action (17-D) and copies modality_cart.json.",
+    )
 
     args = parser.parse_args()
 
@@ -484,6 +605,9 @@ def main():
         args.annotation_source = "human.task_description"
     elif args.embodiment == "ebots":
         args.annotation_source = "human.task_description"
+
+    if args.action_space == "cartesian" and args.embodiment != "ebots":
+        raise ValueError("--action-space cartesian is only supported with --embodiment ebots")
     
     if args.recursive:
         # Process multiple subfolders under input_dir
@@ -498,6 +622,7 @@ def main():
             data_type=args.data_type,
             embodiment=args.embodiment,
             video_key=args.video_key,
+            action_space=args.action_space,
         )
     else:
         convert_raw_to_lerobot(
@@ -509,33 +634,10 @@ def main():
             num_workers=args.num_workers,
             cosmos_predict2=args.cosmos_predict2,
             data_type=args.data_type,
-            video_key=args.video_key
+            video_key=args.video_key,
+            embodiment=args.embodiment,
+            action_space=args.action_space,
         )
-
-    if args.embodiment == "gr1_unified": 
-        source_dir = "IDM_dump/global_metadata/gr1"
-    elif args.embodiment == "robocasa_panda_omron":
-        source_dir = "IDM_dump/global_metadata/robocasa"
-    elif args.embodiment == "franka":
-        source_dir = "IDM_dump/global_metadata/franka"
-    elif args.embodiment == "so100":
-        source_dir = "IDM_dump/global_metadata/so100"
-    elif args.embodiment == "ebots":
-        source_dir = "IDM_dump/global_metadata/ebots"
-    
-    # copy modality.json (ensure meta dir exists when using --recursive)
-    meta_dir = os.path.join(args.output_dir, "meta")
-    os.makedirs(meta_dir, exist_ok=True)
-    shutil.copy(source_dir + "/modality.json", os.path.join(meta_dir, "modality.json"))
-
-    # copy stats.json
-    stats_src = source_dir + "/stats.json"
-    stats_dst = os.path.join(meta_dir, "stats.json")
-    if os.path.exists(stats_src):
-        shutil.copy(stats_src, stats_dst)
-    else:
-        print(f"Warning: stats.json not found, skipping: {stats_src}")
-    
 
 if __name__ == "__main__":
     main()
