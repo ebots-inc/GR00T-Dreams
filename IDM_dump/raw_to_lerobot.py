@@ -109,6 +109,27 @@ def _copy_global_modality_and_stats(meta_dir: Path, embodiment: str | None, acti
         if embodiment != "ebots":
             raise ValueError("action_space='cartesian' is only valid for embodiment='ebots'")
         modal_src = template_dir / "modality_cart.json"
+    elif action_space == "both":
+        if embodiment != "ebots":
+            raise ValueError("action_space='both' is only valid for embodiment='ebots'")
+        joint_src = template_dir / "modality.json"
+        cart_src = template_dir / "modality_cart.json"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        if joint_src.is_file():
+            shutil.copy(joint_src, meta_dir / "modality.json")
+        else:
+            print(f"Warning: joint modality template not found, skipping: {joint_src}")
+        if cart_src.is_file():
+            shutil.copy(cart_src, meta_dir / "modality_cart.json")
+        else:
+            print(f"Warning: cart modality template not found, skipping: {cart_src}")
+        stats_src = template_dir / "stats.json"
+        stats_dst = meta_dir / "stats.json"
+        if stats_src.is_file():
+            shutil.copy(stats_src, stats_dst)
+        else:
+            print(f"Warning: stats.json not found, skipping: {stats_src}")
+        return
     else:
         modal_src = template_dir / "modality.json"
     if not modal_src.is_file():
@@ -252,11 +273,13 @@ def convert_raw_to_lerobot(
 ):
     """Convert raw dataset to LeRobot format.
 
-    For embodiment ``ebots``:
-      - ``action_space=joint`` (default): columns ``observation.state`` and ``action``, dim 17.
-      - ``action_space=cartesian``: columns ``observation.cart_state`` and ``cart_action``, dim 17.
+    For embodiment 'ebots':
+      - 'action_space=joint' (default): columns 'observation.state' and 'action', dim 17.
+      - 'action_space=cartesian': columns 'observation.cart_state' and 'cart_action', dim 17.
+      - 'action_space=both': all four columns above (17-D each); copies 'meta/modality.json'
+        (joint) and 'meta/modality_cart.json' for two-pass IDM inference.
 
-    Other embodiments keep the legacy 44-D ``observation.state`` / ``action`` placeholders.
+    Other embodiments keep the legacy 44-D 'observation.state' / 'action' placeholders.
     """
 
     
@@ -349,28 +372,57 @@ def convert_raw_to_lerobot(
 
             if embodiment == "ebots":
                 if action_space == "cartesian":
-                    state_col, action_col = "observation.cart_state", "cart_action"
+                    ebots_state_action_pairs = [
+                        ("observation.cart_state", "cart_action"),
+                    ]
                 elif action_space == "joint":
-                    state_col, action_col = "observation.state", "action"
+                    ebots_state_action_pairs = [
+                        ("observation.state", "action"),
+                    ]
+                elif action_space == "both":
+                    ebots_state_action_pairs = [
+                        ("observation.state", "action"),
+                        ("observation.cart_state", "cart_action"),
+                    ]
                 else:
                     raise ValueError(
-                        f"ebots action_space must be 'joint' or 'cartesian', got {action_space!r}"
+                        f"ebots action_space must be 'joint', 'cartesian', or 'both', got {action_space!r}"
                     )
                 sa_dim = EBOTS_STATE_ACTION_DIM
             else:
+                ebots_state_action_pairs = None
                 state_col, action_col = "observation.state", "action"
                 sa_dim = DEFAULT_STATE_ACTION_DIM
-            
+
             # Create episode data (placeholder zeros; state/action are filled later by dump_idm_actions or fill_states_from_actions)
-            episode_data = {
-                state_col: [np.zeros(sa_dim, dtype=np.float32)] * actual_frame_count,
-                action_col: [np.zeros(sa_dim, dtype=np.float32)] * actual_frame_count,
-                "timestamp": [i/actual_fps for i in range(actual_frame_count)],
-                "episode_index": [episode_index] * actual_frame_count,
-                "index": np.arange(total_frames, total_frames + actual_frame_count),
-                "task_index": [annotation_to_index[annotation]] * actual_frame_count,
-                f"annotation.{annotation_source}": [[annotation_to_index[annotation]]] * actual_frame_count
-            }
+            episode_data = {}
+            if embodiment == "ebots":
+                for st_col, ac_col in ebots_state_action_pairs:
+                    episode_data[st_col] = [
+                        np.zeros(sa_dim, dtype=np.float32)
+                    ] * actual_frame_count
+                    episode_data[ac_col] = [
+                        np.zeros(sa_dim, dtype=np.float32)
+                    ] * actual_frame_count
+            else:
+                episode_data[state_col] = [
+                    np.zeros(sa_dim, dtype=np.float32)
+                ] * actual_frame_count
+                episode_data[action_col] = [
+                    np.zeros(sa_dim, dtype=np.float32)
+                ] * actual_frame_count
+            episode_data.update(
+                {
+                    "timestamp": [i / actual_fps for i in range(actual_frame_count)],
+                    "episode_index": [episode_index] * actual_frame_count,
+                    "index": np.arange(total_frames, total_frames + actual_frame_count),
+                    "task_index": [annotation_to_index[annotation]] * actual_frame_count,
+                    f"annotation.{annotation_source}": [
+                        [annotation_to_index[annotation]]
+                    ]
+                    * actual_frame_count,
+                }
+            )
             
             # Save episode data
             episode_chunk = episode_index // CHUNKS_SIZE
@@ -446,20 +498,26 @@ def convert_raw_to_lerobot(
 
     if embodiment == "ebots":
         if action_space == "cartesian":
-            st_col, ac_col = "observation.cart_state", "cart_action"
+            feature_pairs = [("observation.cart_state", "cart_action")]
+        elif action_space == "both":
+            feature_pairs = [
+                ("observation.state", "action"),
+                ("observation.cart_state", "cart_action"),
+            ]
         else:
-            st_col, ac_col = "observation.state", "action"
+            feature_pairs = [("observation.state", "action")]
         motor_names = [f"motor_{i}" for i in range(EBOTS_STATE_ACTION_DIM)]
-        info["features"][st_col] = {
-            "dtype": "float32",
-            "shape": (EBOTS_STATE_ACTION_DIM,),
-            "names": motor_names,
-        }
-        info["features"][ac_col] = {
-            "dtype": "float32",
-            "shape": (EBOTS_STATE_ACTION_DIM,),
-            "names": motor_names,
-        }
+        for st_col, ac_col in feature_pairs:
+            info["features"][st_col] = {
+                "dtype": "float32",
+                "shape": (EBOTS_STATE_ACTION_DIM,),
+                "names": motor_names,
+            }
+            info["features"][ac_col] = {
+                "dtype": "float32",
+                "shape": (EBOTS_STATE_ACTION_DIM,),
+                "names": motor_names,
+            }
     else:
         motor_names = [f"motor_{i}" for i in range(DEFAULT_STATE_ACTION_DIM)]
         info["features"]["observation.state"] = {
@@ -574,9 +632,10 @@ def main():
         "--action-space",
         type=str,
         default="joint",
-        choices=["joint", "cartesian"],
+        choices=["joint", "cartesian", "both"],
         help="For embodiment ebots: joint uses observation.state/action (17-D); "
-        "cartesian uses observation.cart_state/cart_action (17-D) and copies modality_cart.json.",
+        "cartesian uses observation.cart_state/cart_action (17-D) and copies modality_cart.json; "
+        "both writes all four columns and copies meta/modality.json + meta/modality_cart.json.",
     )
 
     args = parser.parse_args()
@@ -608,6 +667,8 @@ def main():
 
     if args.action_space == "cartesian" and args.embodiment != "ebots":
         raise ValueError("--action-space cartesian is only supported with --embodiment ebots")
+    if args.action_space == "both" and args.embodiment != "ebots":
+        raise ValueError("--action-space both is only supported with --embodiment ebots")
     
     if args.recursive:
         # Process multiple subfolders under input_dir
