@@ -96,6 +96,7 @@ class LeRobotSingleDataset(Dataset):
         video_backend: str = "decord",
         video_backend_kwargs: dict | None = None,
         transforms: ComposedModalityTransform | None = None,
+        modality_json_path: Path | str | None = None,
     ):
         """
         Initialize the dataset.
@@ -108,6 +109,8 @@ class LeRobotSingleDataset(Dataset):
             video_backend_kwargs (dict): Keyword arguments for the video backend when initializing the video reader.
             transforms (ComposedModalityTransform): The transforms to apply to the dataset.
             embodiment_tag (EmbodimentTag): Overload the embodiment tag for the dataset. e.g. define it as "new_embodiment"
+            modality_json_path (Path | str | None): Optional path to modality JSON. If None, uses 'meta/modality.json' under 'dataset_path'.
+                If relative, it is resolved against 'dataset_path' (e.g. 'meta/modality_cart.json' for ebots cartesian IDM dumps).
         """
         # first check if the path directory exists
         if not Path(dataset_path).exists():
@@ -121,6 +124,11 @@ class LeRobotSingleDataset(Dataset):
         )
 
         self._dataset_path = Path(dataset_path)
+        if modality_json_path is None:
+            self._modality_meta_path = self._dataset_path / LE_ROBOT_MODALITY_FILENAME
+        else:
+            p = Path(modality_json_path)
+            self._modality_meta_path = p if p.is_absolute() else self._dataset_path / p
         self._dataset_name = self._dataset_path.name
         if isinstance(embodiment_tag, EmbodimentTag):
             self.tag = embodiment_tag.value
@@ -217,6 +225,11 @@ class LeRobotSingleDataset(Dataset):
         return self._lerobot_modality_meta
 
     @property
+    def modality_meta_path(self) -> Path:
+        """Filesystem path to the LeRobot modality JSON used for state/action/video key layout."""
+        return self._modality_meta_path
+
+    @property
     def lerobot_info_meta(self) -> dict:
         """The metadata for the LeRobot dataset."""
         return self._lerobot_info_meta
@@ -249,10 +262,10 @@ class LeRobotSingleDataset(Dataset):
         """
 
         # 1. Modality metadata
-        modality_meta_path = self.dataset_path / LE_ROBOT_MODALITY_FILENAME
-        assert (
-            modality_meta_path.exists()
-        ), f"Please provide a {LE_ROBOT_MODALITY_FILENAME} file in {self.dataset_path}"
+        modality_meta_path = self._modality_meta_path
+        assert modality_meta_path.exists(), (
+            f"Modality metadata file not found: {modality_meta_path}"
+        )
 
         # 1.1. State and action modalities
         simplified_modality_meta: dict[str, dict] = {}
@@ -400,10 +413,10 @@ class LeRobotSingleDataset(Dataset):
 
     def _get_lerobot_modality_meta(self) -> LeRobotModalityMetadata:
         """Get the metadata for the LeRobot dataset."""
-        modality_meta_path = self.dataset_path / LE_ROBOT_MODALITY_FILENAME
-        assert (
-            modality_meta_path.exists()
-        ), f"Please provide a {LE_ROBOT_MODALITY_FILENAME} file in {self.dataset_path}"
+        modality_meta_path = self._modality_meta_path
+        assert modality_meta_path.exists(), (
+            f"Modality metadata file not found: {modality_meta_path}"
+        )
         with open(modality_meta_path, "r") as f:
             modality_meta = LeRobotModalityMetadata.model_validate(json.load(f))
         return modality_meta

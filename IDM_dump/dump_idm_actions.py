@@ -27,7 +27,13 @@ from modality_keys import state_action_keys_from_modality
 
 
 
-def load_dataset_and_config(checkpoint_path, validation_dataset_path, video_indices, embodiment=None):
+def load_dataset_and_config(
+    checkpoint_path,
+    validation_dataset_path,
+    video_indices,
+    embodiment=None,
+    modality_json_path=None,
+):
     # Check if checkpoint_path is a HuggingFace model repo
     is_hf_repo = not os.path.exists(checkpoint_path) and '/' in checkpoint_path
     
@@ -104,6 +110,7 @@ def load_dataset_and_config(checkpoint_path, validation_dataset_path, video_indi
         # metadata_version=metadata_version,
         transforms=transform_inst,
         embodiment_tag=embodiment_tag,
+        modality_json_path=modality_json_path,
     )
 
     return cfg, dataset, modality_configs
@@ -173,8 +180,7 @@ def worker_func(
     device = torch.device(f"cuda:{gpu_id}")
     model.to(device)
 
-    modality_json_path = os.path.join(validation_dataset_path, "meta", "modality.json")
-    with open(modality_json_path, "r") as f:
+    with open(dataset.modality_meta_path, "r") as f:
         modality_config = json.load(f)
     _, lerobot_action_column = state_action_keys_from_modality(modality_config)
 
@@ -318,6 +324,7 @@ def validate_checkpoint(
     video_indices=None,
     embodiment=None,
     stats_path=None,
+    modality_json_path=None,
 ):
     device_count = torch.cuda.device_count()
     print(f"Found {device_count} GPUs available.")
@@ -348,7 +355,9 @@ def validate_checkpoint(
         validation_dataset_path,
         video_indices,
         embodiment=embodiment,
+        modality_json_path=modality_json_path,
     )
+    print(f"Using modality metadata: {dataset.modality_meta_path}")
 
     dataset.transforms.eval()
 
@@ -504,6 +513,16 @@ if __name__ == "__main__":
         "Copied into the validation dataset before loading so the loader does not overwrite with zeros. "
         "Schema (keys and dimensions) must match the validation dataset.",
     )
+    parser.add_argument(
+        "--modality-json",
+        type=str,
+        default=None,
+        dest="modality_json",
+        metavar="PATH",
+        help="Path to modality JSON for this run. Default: <dataset>/meta/modality.json. "
+        "Use meta/modality_cart.json (relative to --dataset) for ebots cartesian IDM on a merged dataset "
+        "without overwriting meta/modality.json.",
+    )
 
     args = parser.parse_args()
 
@@ -518,4 +537,5 @@ if __name__ == "__main__":
         video_indices=args.video_indices,
         embodiment=args.embodiment,
         stats_path=args.stats_path,
+        modality_json_path=args.modality_json,
     )
