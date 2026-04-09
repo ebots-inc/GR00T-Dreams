@@ -89,14 +89,22 @@ def fill_episode_states_inplace(
     return len(df), k
 
 
-def recompute_stats_json(dataset: str, parquet_paths: list[str]) -> None:
+def recompute_stats_json(
+    dataset: str,
+    parquet_paths: list[str],
+    stat_keys: list[str] | None = None,
+) -> None:
     """
-    Recompute meta/stats.json from parquet files for the state/action columns in meta/modality.json.
-    Writes to dataset/meta/stats.json so state stats reflect filled state values.
+    Recompute meta/stats.json from parquet files.
+
+    If 'stat_keys' is None, uses the state and action column names from 'meta/modality.json'.
+    Otherwise computes statistics for each listed column name that exists in the parquets and
+    merges into 'meta/stats.json' (existing keys not recomputed are preserved).
     """
-    modality_path = os.path.join(dataset, "meta", "modality.json")
-    with open(modality_path, encoding="utf-8") as f:
-        stat_keys = list(state_action_keys_from_modality(json.load(f)))
+    if stat_keys is None:
+        modality_path = os.path.join(dataset, "meta", "modality.json")
+        with open(modality_path, encoding="utf-8") as f:
+            stat_keys = list(state_action_keys_from_modality(json.load(f)))
     all_data: dict[str, list] = {k: [] for k in stat_keys}
 
     for path in sorted(parquet_paths):
@@ -124,22 +132,56 @@ def recompute_stats_json(dataset: str, parquet_paths: list[str]) -> None:
     meta_dir = os.path.join(dataset, "meta")
     os.makedirs(meta_dir, exist_ok=True)
     stats_path = os.path.join(meta_dir, "stats.json")
-    with open(stats_path, "w") as f:
-        json.dump(le_statistics, f, indent=4)
+    existing: dict = {}
+    if os.path.isfile(stats_path):
+        with open(stats_path, encoding="utf-8") as f:
+            existing = json.load(f)
+    existing.update(le_statistics)
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=4)
     print(f"Recomputed stats from {len(parquet_paths)} parquet files -> {stats_path}")
 
 
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Fill state from action with a 1-step lag (in-place). "
-        "Column names follow meta/modality.json (joint vs cartesian)."
+        "Column names default to meta/modality.json; use --state-col/--action-col to override "
+        "(e.g. ebots joint vs cartesian pairs without swapping modality.json)."
     )
     p.add_argument("--dataset", type=str, required=True, help="LeRobot dataset directory (contains data/chunk-*/).")
     p.add_argument("--dryrun", action="store_true", help="Only report; do not modify files.")
     p.add_argument(
+        "--state-col",
+        type=str,
+        default=None,
+        help="Parquet state column (e.g. observation.state or observation.cart_state). "
+        "If set, --action-col must also be set.",
+    )
+    p.add_argument(
+        "--action-col",
+        type=str,
+        default=None,
+        help="Parquet action column (e.g. action or cart_action). If set, --state-col must also be set.",
+    )
+    p.add_argument(
         "--recompute_stats",
         action="store_true",
-        help="After filling states, recompute meta/stats.json from parquet so observation.state stats are non-zero.",
+        help="After filling states, recompute meta/stats.json from parquet for selected columns.",
+    )
+    p.add_argument(
+        "--recompute-stats-columns",
+        type=str,
+        nargs="+",
+        default=None,
+        metavar="COL",
+        help="With --recompute_stats, compute stats for these parquet columns and merge into meta/stats.json. "
+        "If omitted, uses the state and action columns from meta/modality.json only.",
+    )
+    p.add_argument(
+        "--stats-only",
+        action="store_true",
+        help="Skip filling states; only run --recompute_stats (requires --recompute-stats-columns). "
+        "Use to refresh timestamp/index stats or other columns without re-running the lag fill.",
     )
     args = p.parse_args()
 
@@ -149,9 +191,24 @@ def main() -> int:
     if not parquet_paths:
         raise SystemExit(f"No episode parquets found under: {pattern}")
 
-    modality_path = os.path.join(dataset, "meta", "modality.json")
-    with open(modality_path, encoding="utf-8") as f:
-        state_col, action_col = state_action_keys_from_modality(json.load(f))
+    if args.stats_only:
+        if not args.recompute_stats:
+            raise SystemExit("--stats-only requires --recompute_stats")
+        if not args.recompute_stats_columns:
+            raise SystemExit("--stats-only requires --recompute-stats-columns (list columns to compute)")
+        recompute_stats_json(dataset, parquet_paths, stat_keys=list(args.recompute_stats_columns))
+        print(f"stats-only: wrote meta/stats.json entries for {len(args.recompute_stats_columns)} column(s)")
+        return 0
+
+    sc, ac = args.state_col, args.action_col
+    if (sc is None) ^ (ac is None):
+        raise SystemExit("Provide both --state-col and --action-col, or neither (use meta/modality.json).")
+    if sc is not None and ac is not None:
+        state_col, action_col = sc, ac
+    else:
+        modality_path = os.path.join(dataset, "meta", "modality.json")
+        with open(modality_path, encoding="utf-8") as f:
+            state_col, action_col = state_action_keys_from_modality(json.load(f))
 
     files = 0
     total_rows = 0
@@ -168,7 +225,10 @@ def main() -> int:
     print(f"mode={mode} files={files} total_rows={total_rows} overwritten_dims={last_k}")
 
     if args.recompute_stats and not args.dryrun and parquet_paths:
-        recompute_stats_json(dataset, parquet_paths)
+        if args.recompute_stats_columns:
+            recompute_stats_json(dataset, parquet_paths, stat_keys=list(args.recompute_stats_columns))
+        else:
+            recompute_stats_json(dataset, parquet_paths)
 
     return 0
 
